@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cmath>
 #include "preprocess.h"
 
 #include <pcl/common/common.h>
@@ -44,11 +46,13 @@ void Preprocess::set(bool feat_en, int lid_type, double bld, int pfilt_num)
   point_filter_num = pfilt_num;
 }
 
+#ifndef FASTLIO_NO_LIVOX
 void Preprocess::process(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg, PointCloudXYZI::Ptr& pcl_out)
 {
   avia_handler(msg);
   *pcl_out = pl_surf;
 }
+#endif
 
 void Preprocess::process(const sensor_msgs::msg::PointCloud2::UniquePtr &msg, PointCloudXYZI::Ptr& pcl_out)
 {
@@ -85,6 +89,10 @@ void Preprocess::process(const sensor_msgs::msg::PointCloud2::UniquePtr &msg, Po
       mid360_handler(msg);
       break;
 
+    case RS:
+      rs_handler(msg);
+      break;
+
     default:
       default_handler(msg);
       break;
@@ -92,6 +100,7 @@ void Preprocess::process(const sensor_msgs::msg::PointCloud2::UniquePtr &msg, Po
   *pcl_out = pl_surf;
 }
 
+#ifndef FASTLIO_NO_LIVOX
 void Preprocess::avia_handler(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg)
 {
   pl_surf.clear();
@@ -192,6 +201,8 @@ void Preprocess::avia_handler(const livox_ros_driver2::msg::CustomMsg::UniquePtr
     }
   }
 }
+
+#endif  // FASTLIO_NO_LIVOX
 
 void Preprocess::oust64_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg)
 {
@@ -1066,4 +1077,46 @@ bool Preprocess::edge_jump_judge(const PointCloudXYZI& pl, vector<orgtype>& type
   }
 
   return true;
+}
+
+// S10（09-12）：Robosense Airy / 双雷达合并云。字段 x y z intensity ring timestamp(double 绝对秒)，
+// 帧头 stamp = 首点时间，一帧内跨约 0.1 s。FAST-LIO 内部 curvature = 相对帧头的毫秒，且要求最后一个点最晚 → 这里按时间排序。
+void Preprocess::rs_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg)
+{
+  pl_surf.clear();
+  pl_corn.clear();
+  pl_full.clear();
+  pcl::PointCloud<rs_ros::Point> pl_orig;
+  pcl::fromROSMsg(*msg, pl_orig);
+  int plsize = pl_orig.points.size();
+  if (plsize == 0)
+    return;
+  pl_surf.reserve(plsize / (point_filter_num > 0 ? point_filter_num : 1) + 8);
+  const double hdr = rclcpp::Time(msg->header.stamp).seconds();
+  int n_neg = 0;
+  for (int i = 0; i < plsize; i++)
+  {
+    const auto &p = pl_orig.points[i];
+    if (i % point_filter_num != 0) continue;
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+    double range2 = p.x * p.x + p.y * p.y + p.z * p.z;
+    if (range2 < (blind * blind)) continue;
+    double dt = p.timestamp - hdr;
+    if (dt < -1e-3) { n_neg++; continue; }           // 早于帧头的点（理论上没有）丢掉
+    if (dt < 0) dt = 0;
+    PointType added_pt;
+    added_pt.normal_x = 0;
+    added_pt.normal_y = 0;
+    added_pt.normal_z = 0;
+    added_pt.x = p.x;
+    added_pt.y = p.y;
+    added_pt.z = p.z;
+    added_pt.intensity = p.intensity;
+    added_pt.curvature = float(dt * 1000.0);          // ms
+    pl_surf.points.push_back(added_pt);
+  }
+  std::sort(pl_surf.points.begin(), pl_surf.points.end(),
+            [](const PointType &a, const PointType &b) { return a.curvature < b.curvature; });
+  given_offset_time = true;
+  (void)n_neg;
 }

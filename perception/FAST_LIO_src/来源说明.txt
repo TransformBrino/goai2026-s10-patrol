@@ -1,1 +1,6 @@
-FAST-LIO2 ROS 2 分支（Ericsii fork）源码快照：本地 桌面/赵文博/LIO官方源码-20260912（09-12 下载并在 AGX 编译），commit a4743b095409588842a5b30ddfa27e29d2f99164，上游 https://github.com/hku-mars/FAST_LIO.git。config/s10_airy*.yaml 为 AGX 现行配置（lio_up.sh 默认 s10_airy.yaml，md5 46da4ad8）。AGX 上 lio_ws/src/FAST_LIO 无 .git；AGX 在线后以其源码快照核对差异。
+FAST-LIO2 ROS 2 分支（hku-mars/FAST_LIO，ROS2 分支 commit a4743b0，2025-01-15）在 S10 AGX 上的部署版本快照（2026-09-19 18:46 自 AGX /home/robot/lio_ws/src/FAST_LIO 拉取，去 PCD/Log/build）。
+本队二次开发（09-12，见 S10二次开发-vs-upstream-a4743b0.diff，+96/−18 行，不含内联的 ikd-Tree 子模块）：
+- preprocess.cpp/.h：新增 Robosense Airy / 双雷达合并云处理 rs_handler（雷达类型 RS=5；字段 x y z intensity ring timestamp，逐点 double 绝对秒时间戳 → 帧内相对时间用于去畸变）；
+- laserMapping.cpp：接入 RS 类型分发；
+- CMakeLists.txt / package.xml：去掉 Python/matplotlib 依赖（AGX 无需离线画图），ikd-Tree 内联为源码而非子模块。
+配置：config/s10_airy.yaml（lio_up.sh 默认，md5 46da4ad8）、s10_airy_light.yaml、s10_airy_diag.yaml；IMU 由 deploy_agx/lio/s10_imu_relay.py 从 /IMU_DATA 转发为 /s10/imu。
