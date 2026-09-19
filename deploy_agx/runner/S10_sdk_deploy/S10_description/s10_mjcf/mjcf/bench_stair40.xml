@@ -1,0 +1,11 @@
+<!-- 台阶场景 bench_stair40：立面(cm) 40 40 40，踏面 30cm。由 s10_dev/gen_steps_scene.py 生成，勿手改。-->
+<mujoco model="S10_bench_stair40">
+    <include file="./S10.xml"/>
+    <worldbody>
+      <body name="steps">
+        <geom name="step_0_h400mm" type="box" pos="3.1500 0 -0.0500" size="0.1500 20.0 0.4500" rgba="0.62 0.63 0.65 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="step_1_h400mm" type="box" pos="3.4500 0 0.1500" size="0.1500 20.0 0.6500" rgba="0.62 0.63 0.65 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="step_2_h400mm" type="box" pos="3.7500 0 0.3500" size="0.1500 20.0 0.8500" rgba="0.62 0.63 0.65 1" friction="1 0.01 0.001" condim="3"/>
+      </body>
+    </worldbody>
+</mujoco>

@@ -1,0 +1,18 @@
+<!--
+  基准测试场景：递增台阶。由 s10_dev/gen_step_scene.py 生成，勿手改。
+  机器人朝 +x 前进，依次遇到以下踏步高度（cm）：
+    20.0  25.0  30.0  35.0  40.0
+  卡在哪一级，那一级就是该控制器的爬台阶极限。
+-->
+<mujoco model="S10_bench_steps">
+    <include file="./S10.xml"/>
+    <worldbody>
+      <body name="steps">
+        <geom name="step_0_h200mm" type="box" pos="4.2500 0 -0.1500" size="1.2500 20.0 0.3500" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="step_1_h250mm" type="box" pos="6.7500 0 -0.0250" size="1.2500 20.0 0.4750" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="step_2_h300mm" type="box" pos="9.2500 0 0.1250" size="1.2500 20.0 0.6250" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="step_3_h350mm" type="box" pos="11.7500 0 0.3000" size="1.2500 20.0 0.8000" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="step_4_h400mm" type="box" pos="14.2500 0 0.5000" size="1.2500 20.0 1.0000" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+      </body>
+    </worldbody>
+</mujoco>

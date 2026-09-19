@@ -1,0 +1,5 @@
+# cron 默认用 /bin/sh 跑命令，而 /opt/ros/jazzy/setup.bash 是 bash 语法，
+# 在 sh 下会静默失败 —— 结果 rclpy 不在 PYTHONPATH 里，s10_ctrl.py 起不来
+# （2026-09-10 重启后就是这么丢的）。显式声明 bash。
+SHELL=/bin/bash
+#（09-19 作者：改用官方运控，暂停自启，恢复时去掉本行井号）@reboot sleep 25; /home/robot/boot_up.sh >> /home/robot/boot_up.log 2>&1

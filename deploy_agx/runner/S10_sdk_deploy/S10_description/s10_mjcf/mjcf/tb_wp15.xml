@@ -1,0 +1,25 @@
+<mujoco model="tb_wp15">
+  <!-- 航点15 出口的真实赛道几何（从 scene.xml 抽出，mesh 与 scale 原样保留）。
+       专家在 box 代理上练成却翻不过这里，所以要练在真东西上。 -->
+  <include file="./S10.xml"/>
+  <asset>
+    <mesh name="mesh_1667" file="../meshes/1667.stl" scale="0.00075 0.00075 0.0005"/>
+    <mesh name="mesh_1668" file="../meshes/1668.stl" scale="0.00075 0.00075 0.0005"/>
+    <mesh name="mesh_1669" file="../meshes/1669.stl" scale="0.00075 0.00075 0.0005"/>
+    <mesh name="mesh_1678" file="../meshes/1678.stl" scale="0.00075 0.00075 0.0005"/>
+    <mesh name="mesh_2044" file="../meshes/2044.stl" scale="0.00075 0.00075 0.0005"/>
+    <mesh name="mesh_2045" file="../meshes/2045.stl" scale="0.00075 0.00075 0.0005"/>
+    <mesh name="mesh_2046" file="../meshes/2046.stl" scale="0.00075 0.00075 0.0005"/>
+  </asset>
+  <worldbody>
+    <body name="terrain" pos="-24.5 81 0">
+      <geom type="mesh" mesh="mesh_1667"/>
+      <geom type="mesh" mesh="mesh_1668"/>
+      <geom type="mesh" mesh="mesh_1669"/>
+      <geom type="mesh" mesh="mesh_1678"/>
+      <geom type="mesh" mesh="mesh_2044"/>
+      <geom type="mesh" mesh="mesh_2045"/>
+      <geom type="mesh" mesh="mesh_2046"/>
+    </body>
+  </worldbody>
+</mujoco>

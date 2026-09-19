@@ -1,0 +1,7 @@
+<!-- 由 gen_box_scenes.py 生成，勿手改。box 几何，与评测场景同一种碰撞表示。 -->
+<mujoco model="wall_220">
+    <include file="./S10.xml"/>
+    <worldbody>
+        <geom name="wall" type="box" pos="13.0000 0.0000 -0.4900" size="10.0000 20.0000 0.7100" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+    </worldbody>
+</mujoco>

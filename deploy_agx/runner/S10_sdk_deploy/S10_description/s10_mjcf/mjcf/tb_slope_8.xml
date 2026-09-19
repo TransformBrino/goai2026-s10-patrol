@@ -1,0 +1,26 @@
+<!-- 由 gen_box_scenes.py 生成，勿手改。box 几何，与评测场景同一种碰撞表示。 -->
+<mujoco model="slope_8">
+    <include file="./S10.xml"/>
+    <worldbody>
+        <geom name="r0" type="box" pos="3.0000 0.0000 -0.5800" size="0.2500 20.0000 0.6200" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r1" type="box" pos="3.5000 0.0000 -0.5600" size="0.2500 20.0000 0.6400" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r2" type="box" pos="4.0000 0.0000 -0.5400" size="0.2500 20.0000 0.6600" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r3" type="box" pos="4.5000 0.0000 -0.5200" size="0.2500 20.0000 0.6800" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r4" type="box" pos="5.0000 0.0000 -0.5000" size="0.2500 20.0000 0.7000" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r5" type="box" pos="5.5000 0.0000 -0.4800" size="0.2500 20.0000 0.7200" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r6" type="box" pos="6.0000 0.0000 -0.4600" size="0.2500 20.0000 0.7400" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r7" type="box" pos="6.5000 0.0000 -0.4400" size="0.2500 20.0000 0.7600" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r8" type="box" pos="7.0000 0.0000 -0.4200" size="0.2500 20.0000 0.7800" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r9" type="box" pos="7.5000 0.0000 -0.4000" size="0.2500 20.0000 0.8000" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r10" type="box" pos="8.0000 0.0000 -0.3800" size="0.2500 20.0000 0.8200" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r11" type="box" pos="8.5000 0.0000 -0.3600" size="0.2500 20.0000 0.8400" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r12" type="box" pos="9.0000 0.0000 -0.3400" size="0.2500 20.0000 0.8600" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r13" type="box" pos="9.5000 0.0000 -0.3200" size="0.2500 20.0000 0.8800" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r14" type="box" pos="10.0000 0.0000 -0.3000" size="0.2500 20.0000 0.9000" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r15" type="box" pos="10.5000 0.0000 -0.2800" size="0.2500 20.0000 0.9200" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r16" type="box" pos="11.0000 0.0000 -0.2600" size="0.2500 20.0000 0.9400" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r17" type="box" pos="11.5000 0.0000 -0.2400" size="0.2500 20.0000 0.9600" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r18" type="box" pos="12.0000 0.0000 -0.2200" size="0.2500 20.0000 0.9800" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="r19" type="box" pos="12.5000 0.0000 -0.2000" size="0.2500 20.0000 1.0000" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+    </worldbody>
+</mujoco>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 09-11 晚：我们自己的感知节点（KISS / hmap / 控制台 / lidar_watch）不用共享内存，只走有线网 UDP。
+     原因：systemd-logind RemoveIPC=yes 会在 robot 最后一个登录会话退出时删掉 /dev/shm/fastrtps_*，开机拉起的节点因此"变聋"。
+     和 Codex 给 runner 的 fastdds_control_ethernet.xml 的区别：不设 initialPeersList（保留默认组播发现，自己的节点之间能互相发现），接收缓冲 8 MB（点云 1.35 MB/帧）。 -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>s10_udp_end0</transport_id>
+      <type>UDPv4</type>
+      <receiveBufferSize>8388608</receiveBufferSize>
+      <interfaceWhiteList>
+        <address>10.21.33.102</address>
+      </interfaceWhiteList>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="s10_udp_only" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>s10_udp_end0</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

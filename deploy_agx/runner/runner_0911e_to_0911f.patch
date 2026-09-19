@@ -1,0 +1,43 @@
+--- a/state_machine/quadruped_wheel/rl_control_state.hpp（0911e）
++++ b/state_machine/quadruped_wheel/rl_control_state.hpp（0911f）
+@@ -39,6 +39,7 @@
+         // 这一槽让「全程用带感知的 v6」和「坑里那几十秒用出厂」可以并存。
+         // 留空则完全不启用，行为与原来逐字节一致。
+         std::shared_ptr<S10PolicyRunner> s10_policy_pit_;
++        bool pit_missing_warned_ = false;   // 0911f：楼梯槽没加载时收到 2 的警告，每次按下只打一次
+ 
+         // 高程图收发计数。缺帧率要能看见 —— 静默地一直用兜底值，
+         // 等于让一个按"看得见地形"训出来的策略全程当自己在平地上。
+@@ -84,11 +85,21 @@
+                     // 专家策略切换。导航层（知道机器人位置和航点）把标志写进
+                     // reserved_scale —— 用这个已有的空闲字段，省得改 UserCommand
+                     // 结构体、连带动一堆通信序列化。
+-                    if (s10_policy_climb_ || s10_policy_pit_) {
++                    {
+                         const float sel = uc->reserved_scale;
+                         auto want = s10_policy_;
+-                        if (sel > 1.5f && s10_policy_pit_)         want = s10_policy_pit_;
+-                        else if (sel > 0.5f && s10_policy_climb_)  want = s10_policy_climb_;
++                        if (sel > 1.5f) {
++                            // 0911f（作者 09-11 拍板）：楼梯槽（S10_POLICY_PIT）没加载时收到 /climb_mode 2，
++                            // 留在主策略，不再落到上墙专家（原来的 else-if 会切到 S10_POLICY_CLIMB），并打印醒目警告供控制台显示。
++                            if (s10_policy_pit_) want = s10_policy_pit_;
++                            else if (!pit_missing_warned_) {
++                                std::cout << "!! [CLIMB] 收到楼梯专家请求（/climb_mode 2），但楼梯策略 S10_POLICY_PIT 没加载，留在主策略（0911f）" << std::endl;
++                                pit_missing_warned_ = true;
++                            }
++                        } else {
++                            pit_missing_warned_ = false;
++                            if (sel > 0.5f && s10_policy_climb_) want = s10_policy_climb_;
++                        }
+                         if (want != active_policy_) {
+                             // 观测里含 last_action。两份策略各自维护历史，直接切
+                             // 过去会让观测突然跳变，新策略在一个没见过的状态上起步。
+@@ -199,6 +210,7 @@
+             if (s10_policy_climb_) s10_policy_climb_->OnEnter();
+             if (s10_policy_pit_)   s10_policy_pit_->OnEnter();
+             active_policy_ = s10_policy_;
++            pit_missing_warned_ = false;   // 0911f：重新进 RL 时若仍按着 2，警告会再打一次
+             StateBase::msfb_.UpdateCurrentState(RobotMotionState::RLControlMode);
+         };
+ 

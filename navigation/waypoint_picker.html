@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>S10 航点点选</title>
+<style>
+  body { margin:0; font: 14px/1.4 system-ui, "Microsoft YaHei", sans-serif; background:#f4f4f2; color:#222; }
+  #top { display:flex; gap:12px; align-items:center; padding:8px 12px; background:#fff; border-bottom:1px solid #ddd; flex-wrap:wrap; }
+  #top label { display:flex; gap:4px; align-items:center; }
+  #wrap { display:flex; height: calc(100vh - 58px); }
+  #cv { flex:1; background:#e9e9e6; cursor:crosshair; }
+  #side { width:360px; overflow:auto; background:#fff; border-left:1px solid #ddd; padding:8px 10px; box-sizing:border-box; }
+  table { border-collapse:collapse; width:100%; font-variant-numeric: tabular-nums; }
+  td, th { border-bottom:1px solid #eee; padding:2px 4px; text-align:right; }
+  td:first-child, th:first-child { text-align:left; }
+  tr.sel { background:#fff3c4; }
+  textarea { width:100%; height:120px; font: 12px/1.3 ui-monospace, monospace; }
+  button { padding:3px 8px; }
+  .hint { color:#666; font-size:12px; }
+  input[type=number] { width:60px; }
+</style>
+</head>
+<body>
+<div id="top">
+  <label>俯视图 PNG <input type="file" id="png" accept=".png"></label>
+  <label>元数据 JSON <input type="file" id="json" accept=".json"></label>
+  <label>默认限速 <input type="number" id="vdef" value="0.8" step="0.1" min="0.1"> m/s</label>
+  <label><input type="checkbox" id="align"> 下一点标 align（台阶前对齐）</label>
+  <button id="undo">撤销</button><button id="clear">清空</button>
+  <span class="hint">左键点选加点 · 拖动点移动 · 点击已有点选中后可改限速/删除 · 滚轮缩放 · 右键拖动平移</span>
+</div>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div id="side">
+    <div id="meta" class="hint">先载入 PNG 与 JSON</div>
+    <table id="tbl"><thead><tr><th>#</th><th>x</th><th>y</th><th>限速</th><th>标记</th><th>段长</th></tr></thead><tbody></tbody></table>
+    <div id="sum" class="hint"></div>
+    <div id="edit" style="margin:6px 0; display:none">
+      选中 #<span id="ei"></span>：限速 <input type="number" id="ev" step="0.1" min="0.1"> m/s
+      <label><input type="checkbox" id="ea"> align</label>
+      <label><input type="checkbox" id="es"> stop</label>
+      <button id="edel">删除</button>
+    </div>
+    <div style="margin-top:8px"><button id="export">导出航点文件</button> <button id="copy">复制到剪贴板</button>
+      <button id="import">从下面文本导入（复核用）</button></div>
+    <textarea id="txt" placeholder="# 序号 x y 限速 [align] [stop]"></textarea>
+  </div>
+</div>
+<script>
+(() => {
+  const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+  let img = null, meta = null, pts = [], sel = -1;
+  let scale = 1, ox = 0, oy = 0, drag = null, pan = null;
+  const $ = id => document.getElementById(id);
+
+  function fit() {
+    cv.width = cv.clientWidth; cv.height = cv.clientHeight;
+    if (img) { scale = Math.min(cv.width / img.width, cv.height / img.height); ox = (cv.width - img.width * scale) / 2; oy = (cv.height - img.height * scale) / 2; }
+    draw();
+  }
+  window.addEventListener('resize', fit);
+  // 像素 <-> 地图
+  // 若元数据带 ref_x/ref_y（如 LidarWorks 全局偏移），航点坐标 = 地图坐标 − ref，与傅工/扫描软件一致
+  const rx = () => (meta && meta.ref_x !== undefined) ? meta.ref_x : (meta ? meta.x0 : 0);
+  const ry = () => (meta && meta.ref_y !== undefined) ? meta.ref_y : (meta ? meta.y0 : 0);
+  const px2map = (c, r) => meta ? [meta.x0 + c * meta.res - rx(), meta.y0 + (meta.H - 1 - r) * meta.res - ry()] : [c, r];
+  const map2px = (x, y) => meta ? [(x + rx() - meta.x0) / meta.res, meta.H - 1 - (y + ry() - meta.y0) / meta.res] : [x, y];
+  const scr2px = (sx, sy) => [(sx - ox) / scale, (sy - oy) / scale];
+  const px2scr = (c, r) => [ox + c * scale, oy + r * scale];
+
+  function draw() {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (img) { ctx.imageSmoothingEnabled = scale < 2; ctx.drawImage(img, ox, oy, img.width * scale, img.height * scale); }
+    ctx.lineWidth = 2; ctx.strokeStyle = '#1565c0';
+    ctx.beginPath();
+    pts.forEach((p, i) => { const [c, r] = map2px(p.x, p.y); const [sx, sy] = px2scr(c, r); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); });
+    ctx.stroke();
+    pts.forEach((p, i) => {
+      const [c, r] = map2px(p.x, p.y); const [sx, sy] = px2scr(c, r);
+      ctx.beginPath(); ctx.arc(sx, sy, i === sel ? 8 : 6, 0, Math.PI * 2);
+      ctx.fillStyle = p.align ? '#e65100' : (p.stop ? '#6a1b9a' : (i === 0 ? '#2e7d32' : '#1565c0'));
+      ctx.fill(); ctx.strokeStyle = '#fff'; ctx.stroke();
+      ctx.fillStyle = '#000'; ctx.font = '12px sans-serif'; ctx.fillText(i, sx + 9, sy - 9);
+    });
+    table();
+  }
+  function table() {
+    const tb = $('tbl').querySelector('tbody'); tb.innerHTML = '';
+    let total = 0, tsec = 0;
+    pts.forEach((p, i) => {
+      let seg = 0;
+      if (i) { seg = Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y); total += seg; tsec += seg / p.v; }
+      const tr = document.createElement('tr'); if (i === sel) tr.className = 'sel';
+      tr.innerHTML = `<td>${i}</td><td>${p.x.toFixed(2)}</td><td>${p.y.toFixed(2)}</td><td>${p.v.toFixed(2)}</td><td>${[p.align ? 'align' : '', p.stop ? 'stop' : ''].filter(Boolean).join(' ')}</td><td>${seg ? seg.toFixed(1) : ''}</td>`;
+      tr.onclick = () => select(i); tb.appendChild(tr);
+    });
+    $('sum').textContent = pts.length > 1 ? `共 ${pts.length - 1} 段，${total.toFixed(1)} m，按限速估计 ${tsec.toFixed(0)} s（不含转弯与台阶减速）` : '';
+    $('txt').value = exportText();
+  }
+  function exportText() {
+    return '# 序号 x y 限速 [align] [stop]\n' + pts.map((p, i) => `${i} ${p.x.toFixed(3)} ${p.y.toFixed(3)} ${p.v.toFixed(2)}${p.align ? ' align' : ''}${p.stop ? ' stop' : ''}`).join('\n') + '\n';
+  }
+  function select(i) {
+    sel = i; const e = $('edit');
+    if (i < 0) { e.style.display = 'none'; draw(); return; }
+    e.style.display = ''; $('ei').textContent = i; $('ev').value = pts[i].v; $('ea').checked = !!pts[i].align; $('es').checked = !!pts[i].stop; draw();
+  }
+  $('ev').oninput = () => { if (sel >= 0) { pts[sel].v = parseFloat($('ev').value) || 0.5; draw(); } };
+  $('ea').onchange = () => { if (sel >= 0) { pts[sel].align = $('ea').checked; draw(); } };
+  $('es').onchange = () => { if (sel >= 0) { pts[sel].stop = $('es').checked; draw(); } };
+  $('edel').onclick = () => { if (sel >= 0) { pts.splice(sel, 1); select(-1); } };
+  $('undo').onclick = () => { pts.pop(); select(-1); };
+  $('clear').onclick = () => { if (confirm('清空全部航点？')) { pts = []; select(-1); } };
+  $('export').onclick = () => {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([exportText()], { type: 'text/plain' }));
+    a.download = 'waypoints.txt'; a.click();
+  };
+  $('copy').onclick = () => navigator.clipboard.writeText(exportText()).then(() => alert('已复制'));
+  $('import').onclick = () => {
+    const rows = $('txt').value.split('\n').map(s => s.split('#')[0].trim()).filter(Boolean);
+    const np = [];
+    for (const r of rows) { const f = r.split(/\s+/); if (f.length < 3) continue; np.push({ x: +f[1], y: +f[2], v: (f[3] && /^[0-9.]+$/.test(f[3])) ? +f[3] : +$('vdef').value, align: f.includes('align'), stop: f.includes('stop') }); }
+    pts = np; select(-1);
+  };
+  function hit(sx, sy) {
+    for (let i = pts.length - 1; i >= 0; i--) { const [c, r] = map2px(pts[i].x, pts[i].y); const [px, py] = px2scr(c, r); if (Math.hypot(px - sx, py - sy) < 9) return i; }
+    return -1;
+  }
+  cv.addEventListener('mousedown', ev => {
+    const rect = cv.getBoundingClientRect(), sx = ev.clientX - rect.left, sy = ev.clientY - rect.top;
+    if (ev.button === 2) { pan = { sx, sy, ox, oy }; return; }
+    if (!meta) return;
+    const h = hit(sx, sy);
+    if (h >= 0) { select(h); drag = h; return; }
+    const [c, r] = scr2px(sx, sy); const [x, y] = px2map(c, r);
+    pts.push({ x, y, v: +$('vdef').value, align: $('align').checked, stop: false }); $('align').checked = false; select(-1);
+  });
+  cv.addEventListener('mousemove', ev => {
+    const rect = cv.getBoundingClientRect(), sx = ev.clientX - rect.left, sy = ev.clientY - rect.top;
+    if (pan) { ox = pan.ox + (sx - pan.sx); oy = pan.oy + (sy - pan.sy); draw(); return; }
+    if (drag !== null) { const [c, r] = scr2px(sx, sy); const [x, y] = px2map(c, r); pts[drag].x = x; pts[drag].y = y; draw(); return; }
+    if (meta) { const [c, r] = scr2px(sx, sy); const [x, y] = px2map(c, r); $('meta').textContent = `光标 x=${x.toFixed(2)} y=${y.toFixed(2)}   图 ${meta.W}×${meta.H} px，${meta.res} m/px，原点 (${meta.x0.toFixed(2)}, ${meta.y0.toFixed(2)})`; }
+  });
+  window.addEventListener('mouseup', () => { drag = null; pan = null; });
+  cv.addEventListener('contextmenu', ev => ev.preventDefault());
+  cv.addEventListener('wheel', ev => {
+    ev.preventDefault(); const rect = cv.getBoundingClientRect(), sx = ev.clientX - rect.left, sy = ev.clientY - rect.top;
+    const k = ev.deltaY < 0 ? 1.2 : 1 / 1.2; ox = sx - (sx - ox) * k; oy = sy - (sy - oy) * k; scale *= k; draw();
+  }, { passive: false });
+  $('png').onchange = ev => { const f = ev.target.files[0]; if (!f) return; const im = new Image(); im.onload = () => { img = im; fit(); }; im.src = URL.createObjectURL(f); };
+  $('json').onchange = ev => { const f = ev.target.files[0]; if (!f) return; f.text().then(t => { meta = JSON.parse(t); $('meta').textContent = `已载入元数据：${meta.W}×${meta.H}，${meta.res} m/px`; draw(); }); };
+  // 也支持 ?map=前缀 ：从同目录自动载入 前缀.png 与 前缀.json（现场把文件放在 html 旁边，用 python -m http.server 打开即可）
+  const q = new URLSearchParams(location.search).get('map');
+  if (q) {
+    fetch(q + '.json').then(r => r.json()).then(m => { meta = m; const im = new Image(); im.onload = () => { img = im; fit(); }; im.src = q + '.png'; })
+      .catch(e => { $('meta').textContent = '自动载入失败：' + e; });
+  }
+  fit();
+})();
+</script>
+</body>
+</html>

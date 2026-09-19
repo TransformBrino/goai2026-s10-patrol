@@ -1,0 +1,154 @@
+--- a/include/utils/safe_controller.hpp
++++ b/include/utils/safe_controller.hpp
+@@ -29,6 +29,10 @@
+ 
+ #pragma once
+ #include <chrono>   // 0911d
++#include <cmath>
++#include <cstdlib>
++#include <string>
++#include "imu_gate.hpp"   // 0911e：断流告警与闸门同一阈值
+ 
+ #include "robot_interface.h"
+ #include "user_command_interface.h"
+@@ -63,6 +67,44 @@
+     double last_imu_ts_, imu_check_time_;
+     bool imu_check_flag_ = true;
+     std::chrono::steady_clock::time_point imu_lag_print_{};   // 0911d
++    // 0911e 失控保护（电机不跟随）：09-11 真机两次"发起立电机不动、力矩约 0.01"，一次"站着自己趴下后电机不接受指令"。
++    // 这时 runner 仍按 kp 保持目标，SDK 模式一恢复狗会猛地弹起。判据：12 个腿关节上命令力矩 Σ|kp·(q目标−q)+kd·(v目标−v)+τff| > S10_MFW_CMD_NM（默认 40 N·m），
++    // 而实测力矩 Σ|τ| < S10_MFW_RATIO（默认 10%）× 命令力，连续 S10_MFW_HOLD_S（默认 0.3 s）→ safe_control_mode=2
++    // （起立/RL/趴下转阻尼，锁存到 runner 重启）。正常执行时实测力矩≈命令力矩，力矩饱和时每关节也有约 50 N·m，不会触发。S10_MOTOR_WATCHDOG=0 关闭。
++    static double EnvD(const char* k, double d) { const char* s = std::getenv(k); return (s && *s) ? std::atof(s) : d; }
++    bool mfw_enabled_ = [](){ const char* s = std::getenv("S10_MOTOR_WATCHDOG"); return !(s && std::string(s) == "0"); }();
++    double mfw_cmd_min_ = EnvD("S10_MFW_CMD_NM", 40.0), mfw_ratio_ = EnvD("S10_MFW_RATIO", 0.1), mfw_hold_s_ = EnvD("S10_MFW_HOLD_S", 0.3);
++    bool mfw_bad_ = false, mfw_fired_ = false;
++    bool mfw_debug_ = [](){ const char* s = std::getenv("S10_MFW_DEBUG"); return s && std::string(s) == "1"; }();
++    std::chrono::steady_clock::time_point mfw_dbg_last_{};
++    std::chrono::steady_clock::time_point mfw_since_{};
++    bool IsMotorFollowing() {
++        if (!mfw_enabled_ || mfw_fired_) return true;
++        const MatXf cmd = ri_ptr_->GetJointCommand();
++        const VecXf q = ri_ptr_->GetJointPosition(), dq = ri_ptr_->GetJointVelocity(), tau = ri_ptr_->GetJointTorque();
++        if (cmd.rows() < 16 || cmd.cols() < 5 || q.size() < 16 || dq.size() < 16 || tau.size() < 16) return true;
++        double c = 0.0, m = 0.0;
++        for (int i = 0; i < 16; ++i) {
++            if (i % 4 == 3) continue;   // 轮子（kp=0）不算
++            // 按完整 PD 估命令力矩（只算 kp 项时，快速摆腿里 kd 项抵消会让实测天然偏小、比值偏低）
++            c += std::fabs(double(cmd(i, 0)) * (double(cmd(i, 1)) - double(q(i))) + double(cmd(i, 2)) * (double(cmd(i, 3)) - double(dq(i))) + double(cmd(i, 4)));
++            m += std::fabs(double(tau(i)));
++        }
++        const auto now = std::chrono::steady_clock::now();
++        if (mfw_debug_ && now - mfw_dbg_last_ > std::chrono::milliseconds(500)) {   // S10_MFW_DEBUG=1：每 0.5 s 打印检测看到的量
++            mfw_dbg_last_ = now;
++            std::cout << "[失控保护·调试] 命令力 " << c << " N·m  实测 " << m << " N·m  fl_knee kp=" << cmd(2, 0) << " 目标=" << cmd(2, 1)
++                      << " 实际=" << q(2) << " τ=" << tau(2) << std::endl;
++        }
++        if (!(c > mfw_cmd_min_ && m < mfw_ratio_ * c)) { mfw_bad_ = false; return true; }
++        if (!mfw_bad_) { mfw_bad_ = true; mfw_since_ = now; return true; }
++        if (std::chrono::duration<double>(now - mfw_since_).count() < mfw_hold_s_) return true;
++        mfw_fired_ = true;
++        std::cerr << "!! [失控保护] 连续 " << mfw_hold_s_ << " s：命令力合计 " << c << " N·m，实测力矩合计只有 " << m
++                  << " N·m（< " << int(mfw_ratio_ * 100 + 0.5) << "%）→ 电机没在执行我们的指令（手柄 SDK 模式掉了？），转阻尼并锁存。"
++                  << "恢复 SDK 模式后请重启 runner（0911e）" << std::endl;
++        return false;
++    }
+ 
+     double ri_check_time_, last_ri_ts_;
+     VecXf last_joint_pos_, last_joint_vel_, last_joint_tau_;
+@@ -110,7 +152,7 @@
+         {
+             const double age = ri_ptr_->GetImuRxAgeSec();
+             const auto now = std::chrono::steady_clock::now();
+-            if (age > 0.1 && now - imu_lag_print_ > std::chrono::seconds(1)) {
++            if (age > imu_gate::MaxAgeSec() && now - imu_lag_print_ > std::chrono::seconds(1)) {   // 0911e：原 0.1 s
+                 imu_lag_print_ = now;
+                 if (age > 1e8) std::cout << "========== imu lag warning ========>> 从没收到过 /IMU_DATA（0911d）" << std::endl;
+                 else std::cout << "========== imu lag warning ========>> 已 " << int(age * 1000) << " ms 没收到 /IMU_DATA（0911d）" << std::endl;
+@@ -391,6 +433,9 @@
+                 std::cout << "IMU error!" << std::endl;
+                 usr_cmd_->safe_control_mode = 2;
+             }
++            if (!IsMotorFollowing()) {   // 0911e 失控保护
++                usr_cmd_->safe_control_mode = 2;
++            }
+             if (last_error_code_ != robot_error_state_.error_code) {
+                 if (robot_error_state_.error_code != 0) {
+                     std::cout << "========== error_code ========>> " << 
+--- a/include/utils/imu_gate.hpp
++++ b/include/utils/imu_gate.hpp
+@@ -6,6 +6,7 @@
+  * 真机上从没收到过 IMU：策略一直在"角速度恒 0、重力恒竖直"下跑，却没有任何报错（09-11 AGX 侧查实）。
+  * 这里在"起立""进 RL"两个入口拦住：按本机接收时刻计的 IMU 年龄超过 S10_IMU_MAX_AGE_MS（默认 100 ms），
+  * 或读数非法（NaN、|姿态角|>π、|角速度|>π rad/s、加速度模长不在 0.1g~3g），就不放行，每秒打印一次原因。
++ * 0911e：默认阈值 100 → 200 ms（09-11 真机 AGX 负载约 20 时，100 ms 每 1~2 分钟擦边一次；断流照样拦得住）。
+  * 已经在 RL 里时不强制切状态（safe_controller 只打印断流告警）。
+  */
+ #pragma once
+@@ -21,8 +22,8 @@
+ inline double MaxAgeSec() {
+     static const double v = []() {
+         const char* s = std::getenv("S10_IMU_MAX_AGE_MS");
+-        const double ms = (s && *s) ? std::atof(s) : 100.0;
+-        return (ms > 0.0 ? ms : 100.0) / 1000.0;
++        const double ms = (s && *s) ? std::atof(s) : 200.0;
++        return (ms > 0.0 ? ms : 200.0) / 1000.0;
+     }();
+     return v;
+ }
+--- a/state_machine/state_machine_base.h
++++ b/state_machine/state_machine_base.h
+@@ -13,6 +13,9 @@
+ 
+ #include "state_base.h"
+ #include "safe_controller.hpp"
++#include <algorithm>
++#include <chrono>
++#include <vector>
+ 
+ class TimeTool {
+ private:
+@@ -103,6 +106,10 @@
+     }
+ 
+     virtual ~StateMachineBase() {}
++    // 0911e 控制循环计时（名义 5 ms）：每 60 s 打印周期均值/p99/最大、超过 10 ms 的次数，AGX 负载高时看控制有没有被拖慢。
++    std::chrono::steady_clock::time_point loop_last_{}, loop_t0_{};
++    std::vector<float> loop_dts_;
++    int loop_over_ = 0;
+ 
+     virtual void Start() = 0;
+ 
+@@ -120,6 +127,22 @@
+ 
+         while (rclcpp::ok()) {
+             if (set_timer.time_interrupt()) {
++                {   // 0911e 控制循环计时
++                    const auto tnow = std::chrono::steady_clock::now();
++                    if (loop_last_.time_since_epoch().count() != 0) {
++                        const double dt = std::chrono::duration<double, std::milli>(tnow - loop_last_).count();
++                        loop_dts_.push_back(float(dt)); if (dt > 10.0) ++loop_over_;
++                    }
++                    loop_last_ = tnow;
++                    if (loop_t0_.time_since_epoch().count() == 0) loop_t0_ = tnow;
++                    if (std::chrono::duration<double>(tnow - loop_t0_).count() >= 60.0 && !loop_dts_.empty()) {
++                        std::vector<float> v = loop_dts_; std::sort(v.begin(), v.end());
++                        double mean = 0.0; for (float x : v) mean += x; mean /= double(v.size());
++                        std::cout << "[周期] 近 60 s 控制循环 " << v.size() << " 次：周期均值 " << mean << " ms、p99 " << v[size_t(0.99 * double(v.size() - 1))]
++                                  << " ms、最大 " << v.back() << " ms、超过 10 ms（2 倍名义）" << loop_over_ << " 次（0911e）" << std::endl;
++                        loop_dts_.clear(); loop_over_ = 0; loop_t0_ = tnow;
++                    }
++                }
+                 ri_ptr_->RefreshRobotData();
+ 
+                 current_controller_->Run();
+--- a/interface/robot/hardware/s10_interface.hpp
++++ b/interface/robot/hardware/s10_interface.hpp
+@@ -101,6 +101,7 @@
+      * Joints with index % 4 == 3 have kp forced to 0 (velocity/torque mode)
+      */
+     virtual void SetJointCommand(Eigen::Matrix<float, Eigen::Dynamic, 5> input) {
++        joint_cmd_ = input;   // 0911e：记下最近一次下发的指令（原来只发不存，GetJointCommand 恒为 0，失控保护读不到）
+         auto msg = drdds::msg::JointsDataCmd();
+         for (int i = 0; i < dof_num_; ++i) {
+             msg.data.joints_data[i].position =

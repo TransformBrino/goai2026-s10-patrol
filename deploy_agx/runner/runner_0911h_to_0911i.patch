@@ -1,0 +1,26 @@
+--- a/run_policy/s10_policy_runner.hpp
++++ b/run_policy/s10_policy_runner.hpp
+@@ -268,7 +268,13 @@
+         const float as_hipx  = EnvOr("S10_AS_HIPX",  0.125f);
+         const float as_hipy  = EnvOr("S10_AS_HIPY",  0.25f);
+         const float as_knee  = EnvOr("S10_AS_KNEE",  0.25f);
+-        const float as_wheel = EnvOr("S10_AS_WHEEL", 5.f);
++        // 0911i（09-12，真机楼梯翻车后）：轮子动作缩放可按槽单独给。S10_AS_WHEEL_PIT / _CLIMB / _MAIN 覆盖对应槽（默认沿用 S10_AS_WHEEL）。
++        // 起因：楼梯专家 9300 切入后左前轮动作 −13、其余 −3，×5 = −65 rad/s 目标，真机石材上左前轮空转到 −57 rad/s 侧翻；
++        // 仿真里楼梯槽缩放降到 3 后四轮动作均匀（−10.6/−5.8/−5.4/−6.5）、照样登顶。只给楼梯槽降，主策略 1.8 m/s 下路缘不受影响。
++        float as_wheel = EnvOr("S10_AS_WHEEL", 5.f);
++        if (policy_name == "s10_pit")        as_wheel = EnvOr("S10_AS_WHEEL_PIT",   as_wheel);
++        else if (policy_name == "s10_climb") as_wheel = EnvOr("S10_AS_WHEEL_CLIMB", as_wheel);
++        else                                 as_wheel = EnvOr("S10_AS_WHEEL_MAIN",  as_wheel);
+         for (int leg = 0; leg < 4; ++leg) {
+             action_scale_robot[leg * 4 + 0] = as_hipx;
+             action_scale_robot[leg * 4 + 1] = as_hipy;
+@@ -276,7 +282,7 @@
+             action_scale_robot[leg * 4 + 3] = as_wheel;
+         }
+         std::cout << "[tune] action_scale hipx/hipy/knee/wheel = "
+-                  << as_hipx << "/" << as_hipy << "/" << as_knee << "/" << as_wheel
++                  << as_hipx << "/" << as_hipy << "/" << as_knee << "/" << as_wheel << "（槽 " << policy_name << "，0911i 可按槽给轮子缩放）"
+                   << "   kp_leg=" << kp_leg << " kd_leg=" << kd_leg
+                   << " kd_wheel=" << kd_wheel << std::endl;
+ 

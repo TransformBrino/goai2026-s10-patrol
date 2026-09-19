@@ -1,0 +1,12 @@
+<!-- 由 gen_box_scenes.py 生成，勿手改。box 几何，与评测场景同一种碰撞表示。 -->
+<mujoco model="steps_120">
+    <include file="./S10.xml"/>
+    <worldbody>
+        <geom name="s0" type="box" pos="9.0000 0.0000 -0.5400" size="6.0000 20.0000 0.6600" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="s1" type="box" pos="10.2000 0.0000 -0.4800" size="6.0000 20.0000 0.7200" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="s2" type="box" pos="11.4000 0.0000 -0.4200" size="6.0000 20.0000 0.7800" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="s3" type="box" pos="12.6000 0.0000 -0.3600" size="6.0000 20.0000 0.8400" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="s4" type="box" pos="13.8000 0.0000 -0.3000" size="6.0000 20.0000 0.9000" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+        <geom name="s5" type="box" pos="15.0000 0.0000 -0.2400" size="6.0000 20.0000 0.9600" rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+    </worldbody>
+</mujoco>

@@ -1,0 +1,13 @@
+<!--
+  单堵墙场景，墙高 35 cm。由 gen_wall_scene.py 生成，勿手改。
+  平地 + 6 米助跑 + 一堵墙，用来干净地测爬升极限
+  （累积阶梯那种测法会因为助跑被污染而低估能力）。
+  机器人朝 +x，从 x=0 出发，墙在 x=6。
+-->
+<mujoco model="S10_bench_wall35">
+    <include file="./S10.xml"/>
+    <worldbody>
+      <geom name="wall" type="box" pos="16.0 0 -0.8250" size="10.0 20.0 1.1750"
+            rgba="0.55 0.57 0.60 1" friction="1 0.01 0.001" condim="3"/>
+    </worldbody>
+</mujoco>

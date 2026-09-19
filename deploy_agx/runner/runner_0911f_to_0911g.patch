@@ -1,0 +1,245 @@
+--- a/state_machine/quadruped_wheel/standup_state.hpp（0911f）
++++ b/state_machine/quadruped_wheel/standup_state.hpp（0911g）
+@@ -12,6 +12,9 @@
+ 
+ #include "state_base.h"
+ #include "../../include/utils/imu_gate.hpp"   // 0911d
++#include <array>
++#include <chrono>
++#include <thread>
+ 
+ namespace qw{
+ class StandUpState : public StateBase{
+@@ -22,6 +25,47 @@
+     VecXf goal_joint_pos_, kp_, kd_;
+     MatXf joint_cmd_;
+     double stand_duration_ = 2.;
++    using GuardClock = std::chrono::steady_clock;
++    GuardClock::time_point last_cycle_{}, last_joint_change_{};
++    std::array<GuardClock::time_point, 16> tracking_bad_since_{};
++    double last_joint_stamp_ = 0.;
++    bool stand_fault_latched_ = false;
++    GuardClock::time_point entered_at_{};
++    // 0911g 测试开关（默认关）：S10_TEST_STANDUP_STALL_MS=N → 起立开始 0.5 s 后，在下发指令前阻塞 N ms 一次，
++    // 在仿真里复现 09-11 真机 DDS publish 内部阻塞 333 ms 的情形，用来验证 STAND_GUARD。真机不要设。
++    const double test_stall_s_ = [](){
++        const char* s=std::getenv("S10_TEST_STANDUP_STALL_MS");
++        if (!s || !*s) return 0.;
++        const double ms=std::atof(s);
++        return (std::isfinite(ms) && ms>0. && ms<=2000.) ? ms/1000. : 0.;
++    }();
++    bool test_stall_done_ = false;
++    // 0911g：防护阈值可用环境变量调（默认 = Codex 真机排查用的保守值）；S10_STAND_GUARD=0 整个关掉（不建议）。
++    static double EnvMs(const char* k, double dflt) { const char* s = std::getenv(k); const double v = (s && *s) ? std::atof(s) : dflt;
++                                                     return (std::isfinite(v) && v > 0.) ? v : dflt; }
++    const bool guard_on_ = [](){ const char* s = std::getenv("S10_STAND_GUARD"); return !(s && std::string(s) == "0"); }();
++    const double g_dt_s_    = EnvMs("S10_STAND_GUARD_DT_MS", 50.) / 1000.;      // 控制周期 / 反馈时间跳变
++    const double g_stale_s_ = EnvMs("S10_STAND_GUARD_STALE_MS", 100.) / 1000.;  // 关节反馈停更
++    const double g_block_s_ = EnvMs("S10_STAND_GUARD_BLOCK_MS", 50.) / 1000.;   // 单次计算+发布阻塞
++    const float  g_track_rad_ = float(EnvMs("S10_STAND_GUARD_TRACK_RAD", .35));  // 腿关节跟踪误差
++    const double g_track_s_ = EnvMs("S10_STAND_GUARD_TRACK_MS", 150.) / 1000.;  // 跟踪误差持续时间
++
++    // 0911g（合入 Codex 09-11 真机排查的修复）：起立轨迹按时间推进，停顿 334/338 ms 后会一步追赶 44° 的目标。
++    // 下面这些检查都在下发下一条位置指令之前做；任何一条命中就锁存阻尼（safe_control_mode=2），重启 runner 才恢复。
++    void DampingCommand() {
++        MatXf stop = MatXf::Zero(16, 5);
++        for (int i=0; i<16; ++i) stop(i,2) = (i%4==3) ? 1.f : 2.f;
++        ri_ptr_->SetJointCommand(stop);
++    }
++    void StandFault(const char* reason) {
++        const bool first = !stand_fault_latched_;
++        stand_fault_latched_ = true;
++        uc_ptr_->GetUserCommand()->safe_control_mode = 2;
++        DampingCommand();
++        if (first)
++            std::cerr << "!! [STAND_GUARD] " << reason
++                      << "，已转阻尼并锁存；请重启 runner 并排查（0911g）" << std::endl;
++    }
+ 
+     const float init_hipx_pos_ = Deg2Rad(0.);
+     const float set_wheel_kd_ = 1.;
+@@ -90,12 +134,37 @@
+     virtual void OnEnter() {
+         GetRobotJointValue();
+         RecordJointData();
++        entered_at_ = last_cycle_ = last_joint_change_ = GuardClock::now();
++        std::cout << "[STAND_GUARD] " << (guard_on_ ? "开" : "关（S10_STAND_GUARD=0）") << "：周期/反馈跳变 " << g_dt_s_ * 1e3 << " ms、反馈停更 " << g_stale_s_ * 1e3
++                  << " ms、阻塞 " << g_block_s_ * 1e3 << " ms、跟踪误差 " << g_track_rad_ << " rad 持续 " << g_track_s_ * 1e3 << " ms（0911g）" << std::endl;
++        last_joint_stamp_ = run_time_;
++        tracking_bad_since_.fill(GuardClock::time_point{});
+         StateBase::msfb_.UpdateCurrentState(RobotMotionState::StandingUp);
+     };
+     virtual void OnExit() {
+     }
+     virtual void Run() {
++        if (stand_fault_latched_) { DampingCommand(); return; }
++        if (uc_ptr_->GetUserCommand()->safe_control_mode != 0 ||
++            uc_ptr_->GetUserCommand()->target_mode == uint8_t(RobotMotionState::JointDamping)) {
++            DampingCommand(); return;
++        }
+         GetRobotJointValue();
++        const auto now = GuardClock::now();
++        const double dt = std::chrono::duration<double>(now-last_cycle_).count();
++        const double sensor_dt = run_time_-last_joint_stamp_;
++        last_cycle_ = now;
++        if (!std::isfinite(run_time_) || !current_joint_pos_.allFinite() || !current_joint_vel_.allFinite()) {
++            StandFault("关节数据非有限值"); return;
++        }
++        if (guard_on_ && (dt > g_dt_s_ || sensor_dt > g_dt_s_ + 1e-6 || sensor_dt < -1e-6)) {
++            StandFault("控制周期或关节反馈时间跳变超过 50 ms"); return;
++        }
++        if (sensor_dt > 0.) last_joint_change_ = now;
++        last_joint_stamp_ = run_time_;
++        if (guard_on_ && std::chrono::duration<double>(now-last_joint_change_).count() > g_stale_s_) {
++            StandFault("关节反馈 100 ms 没有更新"); return;
++        }
+         VecXf planning_joint_pos(current_joint_pos_.rows());
+         VecXf planning_joint_vel(current_joint_pos_.rows());
+         if(run_time_ - time_stamp_record_ <= stand_duration_){
+@@ -140,16 +209,41 @@
+             }
+         }
+ 
++        // 0911g：轮子的编码角是连续累计的，不是姿态目标。原来把累计圈数也插值回 0，实测轮速目标约 71 rad/s；
++        // 现在轮子保持当前角度、速度目标 0。
++        for (int i=3; i<16; i+=4) {
++            planning_joint_pos(i) = current_joint_pos_(i);
++            planning_joint_vel(i) = 0.f;
++        }
++        if (!planning_joint_pos.allFinite() || !planning_joint_vel.allFinite()) {
++            StandFault("起立目标非有限值"); return;
++        }
++        for (int i=0; i<16; ++i) {
++            if (i%4==3) continue;
++            if (guard_on_ && std::fabs(planning_joint_pos(i)-current_joint_pos_(i)) > g_track_rad_) {
++                if (tracking_bad_since_[i] == GuardClock::time_point{}) tracking_bad_since_[i] = now;
++                if (std::chrono::duration<double>(now-tracking_bad_since_[i]).count() >= g_track_s_) {
++                    StandFault("腿关节跟踪误差超过 0.35 rad（20°）持续 150 ms"); return;
++                }
++            } else tracking_bad_since_[i] = GuardClock::time_point{};
++        }
+         joint_cmd_.col(1) = planning_joint_pos;
+         joint_cmd_.col(3) = planning_joint_vel;
+         joint_cmd_.col(2) = kd_;
++        if (test_stall_s_>0. && !test_stall_done_ && std::chrono::duration<double>(now-entered_at_).count()>=.5) {
++            test_stall_done_ = true;   // 测试开关：模拟 publish 内部阻塞（只发生一次）
++            std::this_thread::sleep_for(std::chrono::duration<double>(test_stall_s_));
++        }
+         ri_ptr_->SetJointCommand(joint_cmd_);
++        if (guard_on_ && std::chrono::duration<double>(GuardClock::now()-now).count() > g_block_s_)
++            StandFault("起立计算或指令发布阻塞超过 50 ms");
+     }
+     virtual bool LoseControlJudge() {
+         if(uc_ptr_->GetUserCommand()->target_mode == uint8_t(RobotMotionState::JointDamping)) return true;
+         return false;
+     }
+     virtual StateName GetNextStateName() {
++        if (stand_fault_latched_) return StateName::kJointDamping;
+         if(uc_ptr_->GetUserCommand()->safe_control_mode!=0) return StateName::kJointDamping;
+         if(run_time_ - time_stamp_record_ <= 2.*stand_duration_){
+             return StateName::kStandUp;
+--- a/state_machine/quadruped_wheel/joint_damping_state.hpp（0911f）
++++ b/state_machine/quadruped_wheel/joint_damping_state.hpp（0911g）
+@@ -15,7 +15,7 @@
+ namespace qw{
+ class JointDampingState : public StateBase{
+ private:
+-    float time_record_, run_time_;
++    double time_record_, run_time_;   // 0911g：存的是机器人绝对时间戳（约 1.79e9 s），float 在这个量级分辨率约 128 s（Codex 09-11 查出）
+     MatXf joint_cmd_;
+ public:
+     JointDampingState(const RobotName& robot_name, const std::string& state_name, 
+--- a/state_machine/quadruped_wheel/liedown_state.hpp（0911f）
++++ b/state_machine/quadruped_wheel/liedown_state.hpp（0911g）
+@@ -18,7 +18,7 @@
+         std::chrono::steady_clock::time_point imu_gate_print_{};   // 0911d：闸门上次打印时刻
+ private:
+     VecXf init_joint_pos_, init_joint_vel_, current_joint_pos_, current_joint_vel_;
+-    float time_stamp_record_, run_time_;
++    double time_stamp_record_, run_time_;   // 0911g：同上，绝对时间戳要用 double
+     VecXf goal_joint_pos_, kp_, kd_;
+     MatXf joint_cmd_;
+     float liedown_duration_ = 2.;
+@@ -47,8 +47,7 @@
+             return 0;
+         }
+         float theta = -acos((l1*l1+h*h-l2*l2)/(2.*h*l1));
+-        LimitNumber(theta, cp_ptr_->fl_joint_lower_(1), cp_ptr_->fl_joint_upper_(1));
+-        return theta;
++        return LimitNumber(theta, cp_ptr_->fl_joint_lower_(1), cp_ptr_->fl_joint_upper_(1));   // 0911g：LimitNumber 是传值返回，原来丢了返回值、限位没生效
+     }
+ 
+     float GetKneePosByHeight(float h){
+@@ -60,8 +59,7 @@
+             return 0;
+         }
+         float theta = M_PI-acos((l1*l1+l2*l2-h*h)/(2*l1*l2));
+-        LimitNumber(theta, cp_ptr_->fl_joint_lower_(2), cp_ptr_->fl_joint_upper_(2));
+-        return theta;
++        return LimitNumber(theta, cp_ptr_->fl_joint_lower_(2), cp_ptr_->fl_joint_upper_(2));   // 0911g：同上
+     }
+ 
+ public:
+--- a/state_machine/quadruped_wheel/rl_control_state.hpp（0911f）
++++ b/state_machine/quadruped_wheel/rl_control_state.hpp（0911g）
+@@ -50,6 +50,28 @@
+         bool start_flag_ = true;
+ 
+         float policy_cost_time_ = 1;
++        // 0911g：RL 状态的指令发布/策略周期停顿监视。09-11 真机 AGX 上 DDS publish 内部阻塞过 333 ms（Codex 复现）。
++        // 默认只告警、计数：RL 策略每拍按当前观测重算，停顿后不会像起立轨迹那样一步追赶；而在楼梯上锁阻尼 = 原地瘫下，更危险。
++        // S10_RL_STALL_MS 阈值（默认 50）；S10_RL_STALL_DAMP=1 时超过阈值就锁存阻尼（safe_control_mode=2）。
++        const double rl_stall_s_ = [](){ const char* s = std::getenv("S10_RL_STALL_MS"); const double v = (s && *s) ? std::atof(s) : 50.;
++                                          return (std::isfinite(v) && v >= 10. && v <= 2000.) ? v / 1000. : .05; }();
++        const bool rl_stall_damp_ = [](){ const char* s = std::getenv("S10_RL_STALL_DAMP"); return s && std::string(s) == "1"; }();
++        // 测试开关（默认关）：S10_TEST_RL_STALL_MS=N → 进 RL 3 s 后在下发前阻塞 N ms 一次，用来验证上面的监视。真机不要设。
++        const double test_rl_stall_s_ = [](){ const char* s = std::getenv("S10_TEST_RL_STALL_MS"); const double v = (s && *s) ? std::atof(s) : 0.;
++                                               return (std::isfinite(v) && v > 0. && v <= 2000.) ? v / 1000. : 0.; }();
++        bool test_rl_stall_done_ = false;
++        std::chrono::steady_clock::time_point rl_last_pub_{}, rl_entered_{}, rl_stall_print_{};
++        long rl_stall_n_ = 0;
++        void RlStall(const char* what, double ms) {
++            ++rl_stall_n_;
++            const auto now = std::chrono::steady_clock::now();
++            if (rl_stall_print_ == std::chrono::steady_clock::time_point{} || now - rl_stall_print_ > std::chrono::seconds(1)) {
++                rl_stall_print_ = now;
++                std::cout << "!! [RL_STALL] " << what << " " << ms << " ms（阈值 " << rl_stall_s_ * 1e3 << " ms，本次 RL 累计 " << rl_stall_n_ << " 次）"
++                          << (rl_stall_damp_ ? "，S10_RL_STALL_DAMP=1 → 转阻尼并锁存" : "，只告警（S10_RL_STALL_DAMP=1 才锁阻尼）") << "（0911g）" << std::endl;
++            }
++            if (rl_stall_damp_) uc_ptr_->GetUserCommand()->safe_control_mode = 2;
++        }
+ 
+         Eigen::MatrixXf acc_rot = Eigen::MatrixXf::Zero(20, 3);
+         int acc_rot_count = 0;
+@@ -140,7 +162,22 @@
+                     
+                     MatXf res = ra.ConvertToMat();
+ 
+-                    ri_ptr_->SetJointCommand(res);
++                    {   // 0911g：发布与周期停顿监视（见成员说明）
++                        const auto t0 = std::chrono::steady_clock::now();
++                        if (rl_last_pub_ != std::chrono::steady_clock::time_point{}) {
++                            const double per = std::chrono::duration<double>(t0 - rl_last_pub_).count();
++                            if (per > rl_stall_s_ + 0.02) RlStall("策略周期（相邻两次下发间隔）", per * 1e3);
++                        }
++                        if (test_rl_stall_s_ > 0. && !test_rl_stall_done_ && t0 - rl_entered_ > std::chrono::seconds(3)) {
++                            test_rl_stall_done_ = true;   // 测试开关：模拟 publish 内部阻塞（只发生一次）
++                            std::this_thread::sleep_for(std::chrono::duration<double>(test_rl_stall_s_));
++                        }
++                        ri_ptr_->SetJointCommand(res);
++                        const auto t1 = std::chrono::steady_clock::now();
++                        const double pub = std::chrono::duration<double>(t1 - t0).count();
++                        if (pub > rl_stall_s_) RlStall("指令发布阻塞", pub * 1e3);
++                        rl_last_pub_ = t1;
++                    }
+                     run_cnt_record = state_run_cnt_;
+                     clock_gettime(CLOCK_MONOTONIC, &end_timestamp);
+                     policy_cost_time_ = (end_timestamp.tv_sec - start_timestamp.tv_sec) * 1e3
+@@ -202,6 +239,7 @@
+ 
+         virtual void OnEnter() {
+             state_run_cnt_ = -1;
++            rl_last_pub_ = std::chrono::steady_clock::time_point{}; rl_entered_ = std::chrono::steady_clock::now(); rl_stall_n_ = 0;   // 0911g
+             start_flag_ = true;
+             run_policy_thread_ = std::thread(std::bind(&RLControlState::PolicyRunner, this));
+             policy_ptr_->OnEnter();

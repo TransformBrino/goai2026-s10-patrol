@@ -1,0 +1,9 @@
+<!-- 台阶场景 bench_block33_wet：立面(cm) 33，踏面 200cm。由 s10_dev/gen_steps_scene.py 生成，勿手改。-->
+<mujoco model="S10_bench_block33_wet">
+    <include file="./S10.xml"/>
+    <worldbody>
+      <body name="steps">
+        <geom name="step_0_h330mm" type="box" pos="4.0000 0 -0.0850" size="1.0000 20.0 0.4150" rgba="0.62 0.63 0.65 1" friction="0.50 0.01 0.001" condim="3"/>
+      </body>
+    </worldbody>
+</mujoco>

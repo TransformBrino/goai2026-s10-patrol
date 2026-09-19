@@ -1,0 +1,293 @@
+--- a/interface/robot/hardware/dds_interface.hpp
++++ b/interface/robot/hardware/dds_interface.hpp
+@@ -16,6 +16,8 @@
+ #include <iostream>
+ #include <cmath>
+ #include <algorithm>
++#include <atomic>
++#include <chrono>
+ 
+ 
+ #include "common_types.h"
+@@ -37,7 +39,7 @@
+ 
+ class DdsInterface : public RobotInterface{
+ protected:
+-    double ri_ts_, imu_ts_;
++    double ri_ts_ = 0.0, imu_ts_ = 0.0;
+     Vec3f omega_body_, rpy_, acc_;
+     VecXf joint_pos_, joint_vel_, joint_tau_;
+     VecXf motor_temperture_, driver_temperture_;
+@@ -133,7 +135,9 @@
+         joint_cmd_pub_ = node_->create_publisher<drdds::msg::JointsDataCmd>("/JOINTS_CMD", 10);
+         joint_data_sub_ = node_->create_subscription<drdds::msg::JointsData>("/JOINTS_DATA", 10,
+                                     std::bind(&DdsInterface::Handler, this,std::placeholders::_1));
+-        imu_data_sub_ = node_->create_subscription<drdds::msg::ImuData>("/IMU_DATA", 10,
++        // 0911d：机器人 /IMU_DATA 的发布者是 BEST_EFFORT，RELIABLE 订阅与之不兼容、一帧都收不到（09-11 AGX 查实）。
++        // BEST_EFFORT 订阅对 RELIABLE / BEST_EFFORT 两种发布者都兼容（真机、仿真通用）。
++        imu_data_sub_ = node_->create_subscription<drdds::msg::ImuData>("/IMU_DATA", rclcpp::SensorDataQoS(),
+                                     std::bind(&DdsInterface::HandlerIMU, this, std::placeholders::_1));
+         health_data_sub_ = node_->create_subscription<drdds::msg::BatteryData>("/BATTERY_DATA", 10,
+                                     std::bind(&DdsInterface::HandlerHealth, this, std::placeholders::_1));
+@@ -238,6 +242,11 @@
+     virtual double GetImuTimestamp() {
+         return imu_ts_;
+     }
++    // 0911d：距本机最近一次收下 /IMU_DATA 的秒数（本机单调时钟；从没收到过返回 1e9）。
++    virtual double GetImuRxAgeSec() {
++        const double t = imu_rx_steady_.load();
++        return t < 0.0 ? 1e9 : SteadyNow() - t;
++    }
+ 
+     virtual std::vector<uint16_t> GetBatteryData() {
+         return battery_data_;
+@@ -281,12 +290,33 @@
+     int imu_chk_phase_ = 0;
+     double imu_chk_tilt_sum_ = 0.0;
+     int imu_chk_streak_ = 0;
++    // 0911d：接收统计与去重（见 HandlerIMU 开头）。
++    std::atomic<double> imu_rx_steady_{-1.0};
++    uint64_t imu_rx_n_ = 0, imu_drop_n_ = 0, imu_stat_n0_ = 0, imu_stat_d0_ = 0;
++    double imu_stat_t0_ = -1.0;
++    bool imu_rate_said_ = false;
++    static double SteadyNow() {
++        return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
++    }
+ 
+     void HandlerIMU(const drdds::msg::ImuData::SharedPtr msg) {
++        const double rx_now = SteadyNow();
++        const double st = rclcpp::Time(msg->header.stamp).seconds();
++        {   // 0911d 去重/乱序：AGX 侧 09-11 看到 /IMU_DATA 有两个发布者；09-10 真机包里只见到一路，时间戳严格递增
++            // （每帧 +5 ms，但只按实际时间的一半在走，且与 AGX 时钟差约 43 s——所以新鲜度一律按本机接收时刻算）。
++            // 时间戳不大于上一帧就丢；若已 0.5 s 没收下任何帧则无条件接收（防机器人时钟跳变后锁死）。时间戳为 0 不去重。
++            const double last_rx = imu_rx_steady_.load();
++            if (st > 0.0 && imu_ts_ > 0.0 && st <= imu_ts_ && last_rx >= 0.0 && rx_now - last_rx < 0.5) {
++                if (imu_drop_n_++ == 0)
++                    std::cout << "[IMU] 丢弃一帧重复/乱序的 /IMU_DATA（时间戳 " << std::fixed << st << " ≤ 上一帧 " << imu_ts_
++                              << std::defaultfloat << "），之后只在统计行里计数（0911d）" << std::endl;
++                return;
++            }
++        }
+         if (!imu_unit_said_) {
+             imu_unit_said_ = true;
+             std::cout << "[IMU] /IMU_DATA 姿态角按" << (imu_rpy_deg_ ? "【度】" : "【弧度】")
+-                      << "读（S10_IMU_RPY_UNIT=" << (imu_rpy_deg_ ? "deg" : "rad，默认") << "）" << std::endl;
++                      << "读（S10_IMU_RPY_UNIT=" << (imu_rpy_deg_ ? "deg" : "rad，默认") << "）；订阅 QoS=BEST_EFFORT（0911d）" << std::endl;
+         }
+         if (imu_rpy_deg_)
+             rpy_ = Vec3f(Deg2Rad(msg->data.roll), Deg2Rad(msg->data.pitch), Deg2Rad(msg->data.yaw));
+@@ -294,7 +324,18 @@
+             rpy_ = Vec3f(msg->data.roll, msg->data.pitch, msg->data.yaw);
+         acc_ << msg->data.acc_x, msg->data.acc_y, msg->data.acc_z;
+         omega_body_ << msg->data.omega_x, msg->data.omega_y, msg->data.omega_z;
+-        imu_ts_ = rclcpp::Time(msg->header.stamp).seconds();
++        imu_ts_ = st;
++        imu_rx_steady_.store(rx_now);
++        ++imu_rx_n_;
++        if (imu_stat_t0_ < 0.0) {
++            imu_stat_t0_ = rx_now; imu_stat_n0_ = imu_rx_n_; imu_stat_d0_ = imu_drop_n_;
++        } else if (rx_now - imu_stat_t0_ >= (imu_rate_said_ ? 60.0 : 2.0)) {   // 首次 2 s 后报一次，之后每分钟
++            const double dt = rx_now - imu_stat_t0_;
++            std::cout << "[IMU] 近 " << int(dt + 0.5) << " s 收下 /IMU_DATA " << (imu_rx_n_ - imu_stat_n0_) << " 帧（约 "
++                      << int((imu_rx_n_ - imu_stat_n0_) / dt + 0.5) << " Hz），丢弃重复/乱序 " << (imu_drop_n_ - imu_stat_d0_)
++                      << " 帧；当前 rpy(rad) " << rpy_.transpose() << "（0911d）" << std::endl;
++            imu_rate_said_ = true; imu_stat_t0_ = rx_now; imu_stat_n0_ = imu_rx_n_; imu_stat_d0_ = imu_drop_n_;
++        }
+         // 开机自检（只打印，不改控制）：严格静止时（|ω|<0.05 rad/s、||a|−g|<0.3 m/s² 且已连续 0.25 s），
+         // 加速度计比力方向应与姿态角推出的"世界竖直向上"（机体系下 R^T·ez）一致。
+         // 09-10 真机包实测（严格静止帧）：按弧度读误差中位 0.1~0.3°、p95 ≤1°；按度读（旧 runner）误差 ≈ 倾角本身
+--- a/interface/robot/robot_interface.h
++++ b/interface/robot/robot_interface.h
+@@ -142,6 +142,13 @@
+      * @brief Get the Imu Timestamp 
+      * @return float 
+      */
++    /**
++     * @brief 0911d：距本机最近一次收下 IMU 的秒数（本机单调时钟；报文时间戳在真机上不可信）。
++     *        从没收到过应返回 1e9；默认实现返回 0（不跟踪的接口视为总是新鲜）。
++     */
++    virtual double GetImuRxAgeSec(){
++        return 0.0;
++    }
+     virtual double GetImuTimestamp(){
+         return 0.;
+     }
+--- a/state_machine/quadruped_wheel/idle_state.hpp
++++ b/state_machine/quadruped_wheel/idle_state.hpp
+@@ -12,9 +12,11 @@
+ 
+ 
+ #include "state_base.h"
++#include "../../include/utils/imu_gate.hpp"   // 0911d
+ 
+ namespace qw {
+     class IdleState : public StateBase {
++        std::chrono::steady_clock::time_point imu_gate_print_{};   // 0911d：闸门上次打印时刻
+     private:
+         int joint_normal_flag_ = -1;
+         int imu_normal_flag_ = -1;
+@@ -164,8 +166,10 @@
+                 return StateName::kIdle;
+             }
+ 
+-            if (uc_ptr_->GetUserCommand()->target_mode == uint8_t(RobotMotionState::StandingUp))
++            if (uc_ptr_->GetUserCommand()->target_mode == uint8_t(RobotMotionState::StandingUp)) {
++                if (!imu_gate::Ok(&*ri_ptr_, "起立", imu_gate_print_)) return StateName::kIdle;   // 0911d
+                 return StateName::kStandUp;
++            }
+             return StateName::kIdle;
+         }
+     };
+--- a/state_machine/quadruped_wheel/liedown_state.hpp
++++ b/state_machine/quadruped_wheel/liedown_state.hpp
+@@ -11,9 +11,11 @@
+ #pragma once
+ 
+ #include "state_base.h"
++#include "../../include/utils/imu_gate.hpp"   // 0911d
+ 
+ namespace qw{
+ class LieDownState : public StateBase{
++        std::chrono::steady_clock::time_point imu_gate_print_{};   // 0911d：闸门上次打印时刻
+ private:
+     VecXf init_joint_pos_, init_joint_vel_, current_joint_pos_, current_joint_vel_;
+     float time_stamp_record_, run_time_;
+@@ -142,6 +144,7 @@
+             return StateName::kLieDown;
+         }else{
+             if(uc_ptr_->GetUserCommand()->target_mode == uint8_t(RobotMotionState::StandingUp)){
++                if(!imu_gate::Ok(&*ri_ptr_, "起立", imu_gate_print_)) return StateName::kLieDown;   // 0911d
+                 return StateName::kStandUp;
+             }
+         }
+--- a/state_machine/quadruped_wheel/standup_state.hpp
++++ b/state_machine/quadruped_wheel/standup_state.hpp
+@@ -11,9 +11,11 @@
+ #pragma once
+ 
+ #include "state_base.h"
++#include "../../include/utils/imu_gate.hpp"   // 0911d
+ 
+ namespace qw{
+ class StandUpState : public StateBase{
++        std::chrono::steady_clock::time_point imu_gate_print_{};   // 0911d：闸门上次打印时刻
+ private:
+     VecXf init_joint_pos_, init_joint_vel_, current_joint_pos_, current_joint_vel_;
+     double time_stamp_record_, run_time_;
+@@ -153,6 +155,7 @@
+             return StateName::kStandUp;
+         }else{
+             if(uc_ptr_->GetUserCommand()->target_mode == uint8_t(RobotMotionState::RLControlMode)){
++                if(!imu_gate::Ok(&*ri_ptr_, "进 RL", imu_gate_print_)) return StateName::kStandUp;   // 0911d
+                 return StateName::kRLControl;
+             }else if(uc_ptr_->GetUserCommand()->target_mode == uint8_t(RobotMotionState::LieDown)){
+                 return StateName::kLieDown;
+--- a/include/utils/safe_controller.hpp
++++ b/include/utils/safe_controller.hpp
+@@ -28,6 +28,7 @@
+  */
+ 
+ #pragma once
++#include <chrono>   // 0911d
+ 
+ #include "robot_interface.h"
+ #include "user_command_interface.h"
+@@ -61,6 +62,7 @@
+ 
+     double last_imu_ts_, imu_check_time_;
+     bool imu_check_flag_ = true;
++    std::chrono::steady_clock::time_point imu_lag_print_{};   // 0911d
+ 
+     double ri_check_time_, last_ri_ts_;
+     VecXf last_joint_pos_, last_joint_vel_, last_joint_tau_;
+@@ -103,9 +105,16 @@
+             last_imu_ts_ = current_imu_ts_;
+             imu_check_time_ = current_time_;
+         }
+-        if (current_time_ - imu_check_time_ == 0.2) {
+-            std::cout << "========== imu lag warning ========>> "
+-                      << current_time_ - imu_check_time_ << std::endl;
++        // 0911d：原来这里是 "current_time_ - imu_check_time_ == 0.2"（浮点相等，基本不会触发）。改成按本机接收时刻判断
++        // /IMU_DATA 断流，只打印、不改控制（断流时起立/进 RL 由 imu_gate 拦；已在 RL 里不强制切状态）。
++        {
++            const double age = ri_ptr_->GetImuRxAgeSec();
++            const auto now = std::chrono::steady_clock::now();
++            if (age > 0.1 && now - imu_lag_print_ > std::chrono::seconds(1)) {
++                imu_lag_print_ = now;
++                if (age > 1e8) std::cout << "========== imu lag warning ========>> 从没收到过 /IMU_DATA（0911d）" << std::endl;
++                else std::cout << "========== imu lag warning ========>> 已 " << int(age * 1000) << " ms 没收到 /IMU_DATA（0911d）" << std::endl;
++            }
+         }
+ 
+         for (int i = 0; i < 3; ++i) {
+--- a/include/utils/imu_gate.hpp
++++ b/include/utils/imu_gate.hpp
+@@ -0,0 +1,68 @@
++/**
++ * @file imu_gate.hpp
++ * @brief 0911d IMU 闸门。
++ *
++ * 机器人 /IMU_DATA 的两个发布者都是 BEST_EFFORT，0911c 及以前的 runner 用 RELIABLE 订阅（QoS 不兼容），
++ * 真机上从没收到过 IMU：策略一直在"角速度恒 0、重力恒竖直"下跑，却没有任何报错（09-11 AGX 侧查实）。
++ * 这里在"起立""进 RL"两个入口拦住：按本机接收时刻计的 IMU 年龄超过 S10_IMU_MAX_AGE_MS（默认 100 ms），
++ * 或读数非法（NaN、|姿态角|>π、|角速度|>π rad/s、加速度模长不在 0.1g~3g），就不放行，每秒打印一次原因。
++ * 已经在 RL 里时不强制切状态（safe_controller 只打印断流告警）。
++ */
++#pragma once
++#include <chrono>
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <iostream>
++#include <string>
++
++namespace imu_gate {
++
++inline double MaxAgeSec() {
++    static const double v = []() {
++        const char* s = std::getenv("S10_IMU_MAX_AGE_MS");
++        const double ms = (s && *s) ? std::atof(s) : 100.0;
++        return (ms > 0.0 ? ms : 100.0) / 1000.0;
++    }();
++    return v;
++}
++
++// 返回空串 = 放行；否则是不放行的原因。
++template <class RI>
++inline std::string Reason(RI* ri) {
++    char buf[200];
++    const double age = ri->GetImuRxAgeSec();
++    if (age > 1e8) return "从没收到过 /IMU_DATA";
++    if (age > MaxAgeSec()) {
++        std::snprintf(buf, sizeof(buf), "已 %.0f ms 没收到 /IMU_DATA（上限 %.0f ms，S10_IMU_MAX_AGE_MS）", age * 1000.0, MaxAgeSec() * 1000.0);
++        return buf;
++    }
++    const auto rpy = ri->GetImuRpy();
++    const auto omg = ri->GetImuOmega();
++    const auto acc = ri->GetImuAcc();
++    for (int i = 0; i < 3; ++i) {
++        if (std::isnan(rpy(i)) || std::fabs(rpy(i)) > M_PI) return "IMU 姿态角非法（NaN 或 |角|>π）";
++        if (std::isnan(omg(i)) || std::fabs(omg(i)) > M_PI) return "IMU 角速度非法（NaN 或 >π rad/s；机身正被快速转动？）";
++    }
++    const float an = acc.norm();
++    if (std::isnan(an) || an < 0.1f * 9.81f || an > 3.0f * 9.81f) {
++        std::snprintf(buf, sizeof(buf), "IMU 加速度模长 %.2f m/s² 不在 0.1g~3g", double(an));
++        return buf;
++    }
++    return "";
++}
++
++// what：被拦的动作（"起立" / "进 RL"）；last：调用方各自的上次打印时刻。
++template <class RI>
++inline bool Ok(RI* ri, const char* what, std::chrono::steady_clock::time_point& last) {
++    const std::string r = Reason(ri);
++    if (r.empty()) return true;
++    const auto now = std::chrono::steady_clock::now();
++    if (now - last > std::chrono::seconds(1)) {
++        last = now;
++        std::cerr << "!! [IMU] 不" << what << "：" << r << "。（0911d 闸门：收到新鲜 IMU 之前不起立、不进 RL）" << std::endl;
++    }
++    return false;
++}
++
++}  // namespace imu_gate

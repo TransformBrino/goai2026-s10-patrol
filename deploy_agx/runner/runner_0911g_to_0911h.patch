@@ -1,0 +1,77 @@
+--- a/state_machine/quadruped_wheel/rl_control_state.hpp
++++ b/state_machine/quadruped_wheel/rl_control_state.hpp
+@@ -72,6 +72,38 @@
+             }
+             if (rl_stall_damp_) uc_ptr_->GetUserCommand()->safe_control_mode = 2;
+         }
++        // 0911h：RL 期间关节反馈"停更"检查（作者 09-11 晚定）。状态机按 5 ms 定时器走、不等关节数据：/JOINTS_DATA 断了，
++        // 策略照样每拍出指令，只是用的关节位置/速度是冻住的 —— 上面的 RL_STALL 看不到这种情况。这里用本机单调时钟量
++        // "关节时间戳多久没变"（不和机器人时钟比：机器人时钟比 AGX 快约 44 s 也不受影响）。
++        // S10_RL_FB_STALE_MS 阈值（默认 100 ms，可设 20~2000）；默认只告警、计数；S10_RL_STALL_DAMP=1（与 RL_STALL 同一开关）时
++        // 超过阈值就锁存阻尼（safe_control_mode=2）。每次停更打一行（1 s 内最多一行），恢复时再打一行这次停更的总时长。
++        const double fb_stale_s_ = [](){ const char* s = std::getenv("S10_RL_FB_STALE_MS"); const double v = (s && *s) ? std::atof(s) : 100.;
++                                          return (std::isfinite(v) && v >= 20. && v <= 2000.) ? v / 1000. : .1; }();
++        double fb_last_stamp_ = 0.;
++        std::chrono::steady_clock::time_point fb_last_change_{}, fb_print_{};
++        bool fb_stale_on_ = false, fb_stale_said_ = false;
++        long fb_stale_n_ = 0;
++        void CheckJointFeedback() {
++            const auto now = std::chrono::steady_clock::now();
++            const double ts = ri_ptr_->GetInterfaceTimeStamp();
++            if (fb_last_change_ == std::chrono::steady_clock::time_point{} || ts != fb_last_stamp_) {
++                if (fb_stale_on_ && fb_stale_said_)
++                    std::cout << "[RL_FB_STALE] 关节反馈恢复：这次停更共 " << std::chrono::duration<double, std::milli>(now - fb_last_change_).count()
++                              << " ms（0911h）" << std::endl;
++                fb_stale_on_ = false; fb_last_stamp_ = ts; fb_last_change_ = now;
++                return;
++            }
++            const double age = std::chrono::duration<double>(now - fb_last_change_).count();
++            if (fb_stale_on_ || age <= fb_stale_s_) return;
++            fb_stale_on_ = true; ++fb_stale_n_;
++            fb_stale_said_ = (fb_print_ == std::chrono::steady_clock::time_point{} || now - fb_print_ > std::chrono::seconds(1));
++            if (fb_stale_said_) {
++                fb_print_ = now;
++                std::cout << "!! [RL_FB_STALE] 关节反馈 " << age * 1e3 << " ms 没更新（阈值 " << fb_stale_s_ * 1e3 << " ms，本次 RL 累计 " << fb_stale_n_ << " 次）"
++                          << (rl_stall_damp_ ? "，S10_RL_STALL_DAMP=1 → 转阻尼并锁存" : "，只告警（S10_RL_STALL_DAMP=1 才锁阻尼）") << "（0911h）" << std::endl;
++            }
++            if (rl_stall_damp_) uc_ptr_->GetUserCommand()->safe_control_mode = 2;
++        }
+ 
+         Eigen::MatrixXf acc_rot = Eigen::MatrixXf::Zero(20, 3);
+         int acc_rot_count = 0;
+@@ -240,6 +272,9 @@
+         virtual void OnEnter() {
+             state_run_cnt_ = -1;
+             rl_last_pub_ = std::chrono::steady_clock::time_point{}; rl_entered_ = std::chrono::steady_clock::now(); rl_stall_n_ = 0;   // 0911g
++            fb_last_change_ = std::chrono::steady_clock::time_point{}; fb_stale_on_ = false; fb_stale_said_ = false; fb_stale_n_ = 0;   // 0911h
++            std::cout << "[RL_FB_STALE] 开：关节反馈停更阈值 " << fb_stale_s_ * 1e3 << " ms，"
++                      << (rl_stall_damp_ ? "超过就转阻尼并锁存（S10_RL_STALL_DAMP=1）" : "只告警、计数（S10_RL_STALL_DAMP=1 才锁阻尼）") << "（0911h）" << std::endl;
+             start_flag_ = true;
+             run_policy_thread_ = std::thread(std::bind(&RLControlState::PolicyRunner, this));
+             policy_ptr_->OnEnter();
+@@ -260,6 +295,7 @@
+ 
+         virtual void Run() {
+             UpdateRobotObservation();
++            CheckJointFeedback();   // 0911h
+             state_run_cnt_++;
+         }
+ 
+--- a/state_machine/parameters/s10_control_parameters.cpp
++++ b/state_machine/parameters/s10_control_parameters.cpp
+@@ -11,8 +11,12 @@
+     swing_leg_kp_ << 120., 120., 120.;
+     swing_leg_kd_ << 2., 2., 2.;
+ 
+-    fl_joint_lower_ << -0.4363, -2.443, -2.758;
+-    fl_joint_upper_ << 0.6109, 2.443, 2.758;
++    // 0911h：膝限位改成 S10 URDF / 官方 09-04 参数的 ±2.7227（原 ±2.758 比机械限位多约 2°：0911g 起趴下时膝目标会被夹到 2.758、顶在止挡上）。
++    // hipy 仍比 URDF 窄（±2.443），保持 0911g 不动；hipx 见下一条（09-12 改成对称）。
++    // 09-12（作者拍板，AGX 侧 0911g-hipx 同一改法）：hipx 下限 -0.4363 → -0.6109，与训练模型一致的对称 ±0.6109（fr/hr 镜像后同样对称）。
++    // 只影响 idle_state 的 JointDataNormalCheck（待命态准入：外劈 36.5° → 46.5°），standup/liedown 只用 (1)(2)，策略动作范围不受影响。
++    fl_joint_lower_ << -0.6109, -2.443, -2.7227;
++    fl_joint_upper_ << 0.6109, 2.443, 2.7227;
+     joint_vel_limit_ << 45, 22.4, 22.4;
+     torque_limit_ << 32.4, 76.4, 76.4;
+ }
+\ 文件末尾没有换行符

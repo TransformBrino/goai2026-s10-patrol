@@ -1,0 +1,11 @@
+<!--
+  基准测试场景：纯平地。
+  S10.xml 自带 100x100 的地面平面，够跑极速/加速/刹车/转向测试。
+  赛道场景起点到园区只有 4 米平地，测不出极限速度，所以单独建一个。
+
+  用法：
+    S10_MUJOCO_XML=<绝对路径>/bench_flat.xml python3 mujoco_simulation_ros2.py
+-->
+<mujoco model="S10_bench_flat">
+    <include file="./S10.xml"/>
+</mujoco>

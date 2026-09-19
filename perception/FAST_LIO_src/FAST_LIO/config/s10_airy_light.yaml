@@ -1,0 +1,48 @@
+/**:
+    ros__parameters:
+        feature_extract_enable: false
+        point_filter_num: 6
+        max_iteration: 2
+        filter_size_surf: 0.5
+        filter_size_map: 0.5
+        cube_side_length: 200.0
+        runtime_pos_log_enable: false
+        map_file_path: ""
+
+        common:
+            lid_topic:  "/LIDAR/POINTS_MERGED"      # 双 Airy 合并云，机体系（lidar_link），逐点 double timestamp
+            imu_topic:  "/s10/imu"                  # s10_imu_relay.py 把 /IMU_DATA（drdds）转成 sensor_msgs/Imu（机体系，rad/s，m/s²）
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0           # 机器人 IMU 与雷达是同一个时钟（09-12 实测差 ≤0.1 s = 一帧扫描）
+
+        preprocess:
+            lidar_type: 5                # S10 补的 RS：读 Robosense 逐点 timestamp
+            scan_line: 96
+            scan_rate: 10
+            timestamp_unit: 0            # RS 分支不用它
+            blind: 0.5
+
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree:    360.0
+            det_range:     60.0
+            extrinsic_est_en:  false
+            extrinsic_T: [ 0., 0., -0.0306 ]        # 雷达系原点在 IMU/机体系里的位置（与 hmap --lidar-xyz 0 0 -0.0306 一致）
+            extrinsic_R: [ 1., 0., 0.,
+                           0., 1., 0.,
+                           0., 0., 1.]
+
+        publish:
+            path_en:  false
+            effect_map_en: false
+            map_en: false
+            scan_publish_en: false       # 省 CPU：只要 /Odometry
+            dense_publish_en: false
+            scan_bodyframe_pub_en: false
+
+        pcd_save:
+            pcd_save_en: false
+            interval: -1

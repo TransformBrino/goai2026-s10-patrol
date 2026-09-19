@@ -1,0 +1,1 @@
+FAST-LIO2 ROS 2 分支（Ericsii fork）源码快照：本地 桌面/赵文博/LIO官方源码-20260912（09-12 下载并在 AGX 编译），commit a4743b095409588842a5b30ddfa27e29d2f99164，上游 https://github.com/hku-mars/FAST_LIO.git。config/s10_airy*.yaml 为 AGX 现行配置（lio_up.sh 默认 s10_airy.yaml，md5 46da4ad8）。AGX 上 lio_ws/src/FAST_LIO 无 .git；AGX 在线后以其源码快照核对差异。

@@ -1,0 +1,10 @@
+<!-- 翻墙场景 bench_gabion33：墙1 x=3.00 h=0.33 w=0.45；墙2 x=6.50 h=0.38 w=0.45；台面 []。由 s10_dev/gen_hurdle_scene.py 生成，勿手改。-->
+<mujoco model="S10_bench_gabion33">
+    <include file="./S10.xml"/>
+    <worldbody>
+      <body name="hurdles">
+        <geom name="wall_1_h330mm" type="box" pos="3.0000 0 -0.0850" size="0.2250 20.0 0.4150" rgba="0.62 0.63 0.65 1" friction="1.00 0.01 0.001" condim="3"/>
+        <geom name="wall_2_h380mm" type="box" pos="6.5000 0 -0.0600" size="0.2250 20.0 0.4400" rgba="0.62 0.63 0.65 1" friction="1.00 0.01 0.001" condim="3"/>
+      </body>
+    </worldbody>
+</mujoco>
