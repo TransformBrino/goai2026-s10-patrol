@@ -25,7 +25,8 @@
 4. 真机：AGX `bash boot_up.sh` 起全链；控制台 `ssh -L 8089:localhost:8089`；装策略前核 md5。
 
 ## 4. 第三方组件（按原许可证引用，不复制）
-云深处 S10 内置运控（闭源，决赛在役）、墨矩导航系统（闭源，决赛在役）、官方 goai_embodied_future_material（S10_sdk_deploy、dual_airy_merger、drdds）、rslidar_sdk 1.5.19、FAST-LIO2（BSD，ROS2 分支 commit a4743b0；本队二次开发 diff 随包 perception/FAST_LIO_src）、IsaacLab（BSD-3）、rsl_rl（BSD-3）、onnxruntime（MIT）、MuJoCo（Apache-2.0）。版本号见 `env/`。
+完整清单与许可证见 `THIRD_PARTY.md`。
+云深处 S10 内置运控（闭源，决赛在役）、墨矩导航系统（闭源，决赛在役）、官方 goai_embodied_future_material（S10_sdk_deploy、dual_airy_merger、drdds）、rslidar_sdk 1.5.19、FAST-LIO2（GPL-2.0，上游 hku-mars，ROS2 分支 commit a4743b0；本队二次开发源码快照与 diff 随包 perception/FAST_LIO_src，遵循原许可证）、IsaacLab（BSD-3）、rsl_rl（BSD-3）、onnxruntime（MIT）、MuJoCo（Apache-2.0）。版本号见 `env/`。
 
 ## 5. 开源范围
 自研导航、感知、运控训练与部署代码对评委开放（仓库仅评委可见）；训练检查点与大录包按需提供。
